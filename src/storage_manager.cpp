@@ -154,6 +154,34 @@ void update_spi_sd_capacity() {
 }
 #endif
 
+#if AC_STORAGE_SDMMC_ENABLED
+#include <driver/gpio.h>
+#ifndef AC_SDMMC_INTERNAL_PULLUPS
+#define AC_SDMMC_INTERNAL_PULLUPS 1
+#endif
+#ifndef AC_SDMMC_D3_HOLD_HIGH_GPIO
+#define AC_SDMMC_D3_HOLD_HIGH_GPIO -1
+#endif
+// LOCAL PATCH (carry across updates): Arduino SD_MMC passes slot flags=0, so
+// enable ESP32-S3 internal pull-ups on CMD/DATx ourselves and, in 1-bit mode,
+// drive card DAT3 (SPI CS pin on SPI modules) high to keep the card in SD mode.
+static void sdmmc_prepare_pins() {
+#if AC_SDMMC_INTERNAL_PULLUPS
+    const int pins[] = {AC_SDMMC_CMD_GPIO, AC_SDMMC_D0_GPIO, AC_SDMMC_D1_GPIO,
+                        AC_SDMMC_D2_GPIO, AC_SDMMC_D3_GPIO};
+    for (int pin : pins) {
+        if (pin >= 0) gpio_pullup_en(static_cast<gpio_num_t>(pin));
+    }
+#endif
+#if AC_SDMMC_D3_HOLD_HIGH_GPIO >= 0
+    const gpio_num_t d3 = static_cast<gpio_num_t>(AC_SDMMC_D3_HOLD_HIGH_GPIO);
+    gpio_reset_pin(d3);
+    gpio_set_direction(d3, GPIO_MODE_OUTPUT);
+    gpio_set_level(d3, 1);
+#endif
+}
+#endif
+
 bool mount_sdmmc() {
 #if AC_STORAGE_SDMMC_ENABLED
     owner_status.configured = true;
@@ -189,6 +217,7 @@ bool mount_sdmmc() {
         return false;
     }
 
+    sdmmc_prepare_pins();
     if (!SD_MMC.begin(AC_STORAGE_MOUNT_POINT, mode1bit, false,
                       AC_SDMMC_FREQ_KHZ, AC_STORAGE_MAX_OPEN_FILES)) {
         set_state(StorageType::SdMmc, StorageState::NotPresent,
@@ -196,6 +225,7 @@ bool mount_sdmmc() {
         return false;
     }
 
+    sdmmc_prepare_pins();  // re-assert after driver pin setup
     const uint8_t card_type = SD_MMC.cardType();
     copy_cstr(owner_status.card_type, sizeof(owner_status.card_type),
               card_type_name(card_type));
